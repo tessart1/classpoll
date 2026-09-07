@@ -1,4 +1,4 @@
-# ClassPoll Version 1.0
+# ClassPoll Version 1.1.0
 
 A simple live classroom polling web app designed for GitHub Pages + Firebase Realtime Database.
 
@@ -90,3 +90,7 @@ Open the GitHub Pages address on your classroom computer. The instructor screen 
 ## Notes about anonymous / duplicate voting
 
 Version 1 creates a random identifier in the student's browser and uses it to prevent a second response from that same browser for that poll. A student could technically vote again by switching browsers, clearing browser storage, or using another device. This is appropriate for informal classroom polling, not secure elections or graded testing.
+
+
+## Version 1.1
+Adds instructor-controlled sharing of poll results to student phones. Results remain projector-only unless the instructor chooses **Share results with students** after revealing them.

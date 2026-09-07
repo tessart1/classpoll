@@ -51,7 +51,7 @@ function renderInstructor() {
   root.innerHTML = `
     <main class="app-shell">
       <div class="topbar">
-        <div class="brand">ClassPoll <small>Instructor view · Version 1.0</small></div>
+        <div class="brand">ClassPoll <small>Instructor view · Version 1.1</small></div>
         <div id="connectionStatus" class="status-pill">${configured ? "Connecting…" : "Firebase setup required"}</div>
       </div>
 
@@ -99,6 +99,7 @@ function renderInstructor() {
         </div>
         <div class="btn-row">
           <button id="toggleResults" class="btn btn-success" disabled>Reveal results</button>
+          <button id="shareResults" class="btn" disabled>Share results with students</button>
           <button id="fullscreen" class="btn" disabled>Full-screen results</button>
         </div>
         <div id="resultsCovered" class="results-covered">Results are hidden from the class</div>
@@ -140,7 +141,8 @@ function renderInstructor() {
       question,
       choices,
       open: true,
-      createdAt: serverTimestamp()
+      createdAt: serverTimestamp(),
+      shareResults: false
     };
     await set(ref(db, `polls/${pollId}`), poll);
     activePollId = pollId;
@@ -149,6 +151,7 @@ function renderInstructor() {
     showJoinInfo();
     listenResults();
     document.getElementById("toggleResults").disabled = false;
+    document.getElementById("shareResults").disabled = true;
     document.getElementById("fullscreen").disabled = false;
   };
 
@@ -194,9 +197,21 @@ function renderInstructor() {
     document.getElementById("barList").classList.toggle("hidden", !show);
     document.getElementById("resultsCovered").classList.toggle("hidden", show);
     document.getElementById("toggleResults").textContent = show ? "Hide results" : "Reveal results";
+    const share = document.getElementById("shareResults");
+    if (share && activePoll) share.disabled = !show;
   }
 
   document.getElementById("toggleResults").onclick = () => setResultsVisibility(!resultsVisible);
+
+  document.getElementById("shareResults").onclick = async () => {
+    if (!activePollId || !resultsVisible) return;
+    const next = !activePoll.shareResults;
+    activePoll.shareResults = next;
+    await update(ref(db, `polls/${activePollId}`), {shareResults: next});
+    const btn = document.getElementById("shareResults");
+    btn.textContent = next ? "Stop sharing with students" : "Share results with students";
+    btn.className = next ? "btn btn-danger" : "btn";
+  };
 
   document.getElementById("togglePoll").onclick = async () => {
     if (!activePollId) return;
@@ -215,6 +230,9 @@ function renderInstructor() {
     document.getElementById("barList").innerHTML = "";
     setResultsVisibility(false);
     document.getElementById("toggleResults").disabled = true;
+    document.getElementById("shareResults").disabled = true;
+    document.getElementById("shareResults").textContent = "Share results with students";
+    document.getElementById("shareResults").className = "btn";
     document.getElementById("fullscreen").disabled = true;
     document.getElementById("question").focus();
   };
@@ -240,21 +258,49 @@ async function renderStudent(pollId) {
   }
 
   const pollRef = ref(db, `polls/${pollId}`);
+  let renderToken = 0;
+
+  async function showSharedResults(poll) {
+    const snap = await get(ref(db, `responses/${pollId}`));
+    const values = snap.val() || {};
+    const counts = Array(poll.choices.length).fill(0);
+    Object.values(values).forEach(v => {
+      if (Number.isInteger(v.choice) && counts[v.choice] !== undefined) counts[v.choice]++;
+    });
+    const total = counts.reduce((a,b)=>a+b,0);
+    content.innerHTML = `
+      <div class="helper">Poll ${esc(pollId)} · Results</div>
+      <div class="student-question">${esc(poll.question)}</div>
+      <div class="bar-list student-results">
+        ${poll.choices.map((c,i) => {
+          const pct = total ? Math.round(counts[i] / total * 100) : 0;
+          return `<div class="bar-row"><div class="bar-label">${esc(c)}</div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><div class="bar-value">${counts[i]} · ${pct}%</div></div>`;
+        }).join("")}
+      </div>
+      <p class="helper">${total} response${total===1?"":"s"}</p>`;
+  }
+
   onValue(pollRef, async snap => {
+    const token = ++renderToken;
     if (!snap.exists()) {
       content.innerHTML = `<h2>Poll not found</h2><p class="helper">Check the QR code or ask your instructor for a new one.</p>`;
       return;
     }
     const poll = snap.val();
+    if (poll.shareResults) {
+      await showSharedResults(poll);
+      return;
+    }
     if (!poll.open) {
-      content.innerHTML = `<h2>Voting is closed</h2><p class="helper">Your instructor has closed this poll.</p>`;
+      content.innerHTML = `<h2>Voting is closed</h2><p class="helper">Your instructor has closed this poll. Results will appear here if the instructor shares them.</p>`;
       return;
     }
     const id = respondentId(pollId);
     const myVoteRef = ref(db, `responses/${pollId}/${id}`);
     const existing = await get(myVoteRef);
+    if (token !== renderToken) return;
     if (existing.exists()) {
-      content.innerHTML = `<div class="thanks"><div class="check">✓</div><h2>Response recorded</h2><p class="helper">You have already responded to this poll.</p></div>`;
+      content.innerHTML = `<div class="thanks"><div class="check">✓</div><h2>Response recorded</h2><p class="helper">Results will appear here if your instructor shares them.</p></div>`;
       return;
     }
 
@@ -282,7 +328,7 @@ async function renderStudent(pollId) {
         return;
       }
       await set(myVoteRef, { choice:selected, submittedAt:serverTimestamp() });
-      content.innerHTML = `<div class="thanks"><div class="check">✓</div><h2>Response recorded</h2><p class="helper">Thank you.</p></div>`;
+      content.innerHTML = `<div class="thanks"><div class="check">✓</div><h2>Response recorded</h2><p class="helper">Results will appear here if your instructor shares them.</p></div>`;
     };
   });
 }

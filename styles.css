@@ -93,3 +93,11 @@ textarea { min-height:88px; resize:vertical; }
   .bar-value { text-align:left; }
   .topbar { align-items:flex-start; }
 }
+
+/* Version 1.1 */
+.student-results { margin-top: 20px; text-align: left; }
+.student-results .bar-row { grid-template-columns: minmax(90px, 1fr) 2fr auto; }
+@media (max-width: 520px) {
+  .student-results .bar-row { grid-template-columns: 1fr auto; gap: 6px 10px; }
+  .student-results .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}

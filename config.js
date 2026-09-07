@@ -1,4 +1,4 @@
-// ClassPoll v1 — Firebase configuration
+// ClassPoll v1.2 — Firebase configuration
 window.CLASSPOLL_FIREBASE_CONFIG = {
   apiKey: "AIzaSyDzdPOmQ1d0tH1ZSW2_7211XdcLcSxdUcc",
   authDomain: "class-poll-7d89a.firebaseapp.com",

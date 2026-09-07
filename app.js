@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
-  getDatabase, ref, set, get, update, onValue, remove, runTransaction, serverTimestamp
+  getDatabase, ref, set, get, update, onValue, remove, push, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 
 const root = document.getElementById("app");
@@ -51,46 +51,65 @@ function renderInstructor() {
   root.innerHTML = `
     <main class="app-shell">
       <div class="topbar">
-        <div class="brand">ClassPoll <small>Instructor view · Version 1.1</small></div>
+        <div class="brand">ClassPoll <small>Instructor view · Version 1.2</small></div>
         <div id="connectionStatus" class="status-pill">${configured ? "Connecting…" : "Firebase setup required"}</div>
       </div>
 
-      ${configured ? "" : `<div class="notice error"><strong>One-time setup needed:</strong> this copy of ClassPoll is ready, but it still needs your Firebase configuration. Follow the README instructions before publishing it to students.</div>`}
+      ${configured ? "" : `<div class="notice error"><strong>One-time setup needed:</strong> this copy of ClassPoll needs its Firebase configuration before it can be used.</div>`}
 
-      <div class="grid">
+      <div class="library-layout">
+        <section class="card" id="libraryCard">
+          <div class="section-heading">
+            <div>
+              <h2>Saved polls</h2>
+              <p class="helper">Prepare questions before class and organize them into poll sets.</p>
+            </div>
+            <button id="newSet" class="btn" ${configured ? "" : "disabled"}>+ New set</button>
+          </div>
+          <div id="libraryEmpty" class="library-empty">No saved polls yet. Create a question below, then choose <strong>Save poll</strong>.</div>
+          <div id="setList" class="set-list"></div>
+        </section>
+
         <section class="card" id="setupCard">
-          <h2>Create a poll</h2>
+          <div class="section-heading">
+            <div>
+              <h2 id="editorTitle">Create a poll</h2>
+              <p id="editorHint" class="helper">Use this for an impromptu poll, or save it for later.</p>
+            </div>
+            <button id="clearEditor" class="btn">Clear</button>
+          </div>
           <label for="question">Question</label>
           <textarea id="question" placeholder="e.g., Which factor is most likely to introduce cognitive bias?"></textarea>
           <label>Response choices</label>
           <div id="answers" class="answers"></div>
           <div class="btn-row">
             <button id="addAnswer" class="btn">+ Add choice</button>
+            <button id="savePoll" class="btn" ${configured ? "" : "disabled"}>Save poll</button>
             <button id="createPoll" class="btn btn-primary" ${configured ? "" : "disabled"}>Open poll</button>
           </div>
-          <p class="helper">Students vote anonymously. Version 1 limits each browser/device to one response per poll, but this is intended as a classroom convenience rather than a high-security voting system.</p>
-        </section>
-
-        <section class="card" id="joinCard">
-          <h2>Student access</h2>
-          <div id="noPollMessage" class="helper">Create a poll to generate the student QR code.</div>
-          <div id="joinDetails" class="hidden">
-            <div class="qr-wrap">
-              <div id="qrcode"></div>
-              <div>
-                <div class="helper">Poll code</div>
-                <div id="pollCode" class="code-box"></div>
-                <p class="helper">Students can scan the QR code with their phone camera.</p>
-                <div id="joinLink" class="join-link"></div>
-              </div>
-            </div>
-            <div class="btn-row">
-              <button id="togglePoll" class="btn btn-danger">Close voting</button>
-              <button id="newPoll" class="btn">New poll</button>
-            </div>
-          </div>
+          <p class="helper">Students vote anonymously. This app limits each browser/device to one response per live poll, but it is intended as a classroom convenience rather than a high-security voting system.</p>
         </section>
       </div>
+
+      <section class="card" id="joinCard" style="margin-top:20px">
+        <h2>Student access</h2>
+        <div id="noPollMessage" class="helper">Open a poll to generate the student QR code.</div>
+        <div id="joinDetails" class="hidden">
+          <div class="qr-wrap">
+            <div id="qrcode"></div>
+            <div>
+              <div class="helper">Poll code</div>
+              <div id="pollCode" class="code-box"></div>
+              <p class="helper">Students can scan the QR code with their phone camera.</p>
+              <div id="joinLink" class="join-link"></div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button id="togglePoll" class="btn btn-danger">Close voting</button>
+            <button id="newPoll" class="btn">New poll</button>
+          </div>
+        </div>
+      </section>
 
       <section class="card" id="resultsCard" style="margin-top:20px">
         <div class="results-head">
@@ -108,6 +127,12 @@ function renderInstructor() {
     </main>`;
 
   const answersEl = document.getElementById("answers");
+  let editingSaved = null; // { setId, pollId }
+  let savedSets = {};
+  let activePollId = null;
+  let activePoll = null;
+  let resultsVisible = false;
+
   const addChoice = (value="") => {
     if (answersEl.children.length >= 6) return;
     const row = document.createElement("div");
@@ -116,34 +141,191 @@ function renderInstructor() {
     row.querySelector(".remove-choice").onclick = () => { if (answersEl.children.length > 2) row.remove(); };
     answersEl.appendChild(row);
   };
-  ["", "", "", ""].forEach(addChoice);
-  document.getElementById("addAnswer").onclick = () => addChoice();
 
-  let activePollId = null;
-  let activePoll = null;
-  let resultsVisible = false;
-  let unsubscribe = null;
+  function resetAnswers(values=["", "", "", ""]) {
+    answersEl.innerHTML = "";
+    const normalized = values.length >= 2 ? values.slice(0,6) : ["", "", "", ""];
+    normalized.forEach(addChoice);
+  }
+  resetAnswers();
+
+  document.getElementById("addAnswer").onclick = () => addChoice();
+  document.getElementById("clearEditor").onclick = clearEditor;
+
+  function readEditor() {
+    return {
+      question: document.getElementById("question").value.trim(),
+      choices: [...answersEl.querySelectorAll("input")].map(i => i.value.trim()).filter(Boolean)
+    };
+  }
+
+  function validateEditor() {
+    const data = readEditor();
+    if (!data.question) { alert("Please enter a question."); return null; }
+    if (data.choices.length < 2) { alert("Please enter at least two response choices."); return null; }
+    return data;
+  }
+
+  function clearEditor() {
+    editingSaved = null;
+    document.getElementById("question").value = "";
+    resetAnswers();
+    document.getElementById("editorTitle").textContent = "Create a poll";
+    document.getElementById("editorHint").textContent = "Use this for an impromptu poll, or save it for later.";
+    document.getElementById("savePoll").textContent = "Save poll";
+    document.getElementById("question").focus();
+  }
+
+  function loadIntoEditor(setId, pollId) {
+    const saved = savedSets?.[setId]?.polls?.[pollId];
+    if (!saved) return;
+    editingSaved = {setId, pollId};
+    document.getElementById("question").value = saved.question || "";
+    resetAnswers(saved.choices || []);
+    document.getElementById("editorTitle").textContent = "Edit saved poll";
+    document.getElementById("editorHint").textContent = `Loaded from “${savedSets[setId].name || "Untitled set"}”. You can edit it, save changes, or open it now.`;
+    document.getElementById("savePoll").textContent = "Save changes";
+    document.getElementById("setupCard").scrollIntoView({behavior:"smooth", block:"start"});
+  }
+
+  function chooseSet(excludeId=null) {
+    const entries = Object.entries(savedSets || {}).filter(([id]) => id !== excludeId);
+    if (!entries.length) return null;
+    const menu = entries.map(([id,s],i)=>`${i+1}. ${s.name || "Untitled set"}`).join("\n");
+    const raw = prompt(`Choose a poll set:\n\n${menu}\n\nEnter the number:`);
+    if (raw === null) return null;
+    const idx = Number(raw) - 1;
+    return entries[idx]?.[0] || null;
+  }
+
+  document.getElementById("newSet").onclick = async () => {
+    const name = prompt("Name this poll set (for example, Ethics – Class 3):");
+    if (!name || !name.trim()) return;
+    const newRef = push(ref(db, "savedPollSets"));
+    await set(newRef, {name:name.trim(), createdAt:serverTimestamp()});
+  };
+
+  document.getElementById("savePoll").onclick = async () => {
+    const data = validateEditor();
+    if (!data) return;
+
+    if (editingSaved) {
+      await update(ref(db, `savedPollSets/${editingSaved.setId}/polls/${editingSaved.pollId}`), {
+        question:data.question, choices:data.choices, updatedAt:serverTimestamp()
+      });
+      alert("Saved poll updated.");
+      return;
+    }
+
+    let setId = chooseSet();
+    if (!setId) {
+      const setName = prompt("Create a poll set for this question.\n\nSet name:", "My Polls");
+      if (!setName || !setName.trim()) return;
+      const newSetRef = push(ref(db, "savedPollSets"));
+      setId = newSetRef.key;
+      await set(newSetRef, {name:setName.trim(), createdAt:serverTimestamp()});
+    }
+    const pollRef = push(ref(db, `savedPollSets/${setId}/polls`));
+    await set(pollRef, {question:data.question, choices:data.choices, createdAt:serverTimestamp()});
+    editingSaved = {setId, pollId:pollRef.key};
+    document.getElementById("editorTitle").textContent = "Edit saved poll";
+    document.getElementById("editorHint").textContent = `Saved in “${savedSets?.[setId]?.name || "poll set"}”.`;
+    document.getElementById("savePoll").textContent = "Save changes";
+  };
+
+  function renderLibrary() {
+    const setList = document.getElementById("setList");
+    const entries = Object.entries(savedSets || {}).sort((a,b)=>(a[1].name||"").localeCompare(b[1].name||""));
+    document.getElementById("libraryEmpty").classList.toggle("hidden", entries.length > 0);
+    setList.innerHTML = entries.map(([setId,setData]) => {
+      const polls = Object.entries(setData.polls || {});
+      return `<div class="poll-set">
+        <div class="poll-set-head">
+          <div>
+            <div class="poll-set-title">${esc(setData.name || "Untitled set")}</div>
+            <div class="helper">${polls.length} saved poll${polls.length===1?"":"s"}</div>
+          </div>
+          <div class="set-actions">
+            <button class="mini-btn rename-set" data-set="${setId}">Rename</button>
+            <button class="mini-btn delete-set" data-set="${setId}">Delete set</button>
+          </div>
+        </div>
+        <div class="saved-poll-list">
+          ${polls.length ? polls.map(([pollId,p],i)=>`<div class="saved-poll">
+            <div class="saved-poll-main">
+              <div class="saved-number">${i+1}</div>
+              <div><div class="saved-question">${esc(p.question || "Untitled question")}</div><div class="helper">${(p.choices||[]).length} choices</div></div>
+            </div>
+            <div class="saved-actions">
+              <button class="mini-btn open-saved" data-set="${setId}" data-poll="${pollId}">Open</button>
+              <button class="mini-btn edit-saved" data-set="${setId}" data-poll="${pollId}">Edit</button>
+              <button class="mini-btn duplicate-saved" data-set="${setId}" data-poll="${pollId}">Duplicate</button>
+              <button class="mini-btn move-saved" data-set="${setId}" data-poll="${pollId}">Move</button>
+              <button class="mini-btn delete-saved" data-set="${setId}" data-poll="${pollId}">Delete</button>
+            </div>
+          </div>`).join("") : `<div class="helper empty-set">No polls in this set yet.</div>`}
+        </div>
+      </div>`;
+    }).join("");
+
+    setList.querySelectorAll(".edit-saved").forEach(btn => btn.onclick = () => loadIntoEditor(btn.dataset.set, btn.dataset.poll));
+    setList.querySelectorAll(".open-saved").forEach(btn => btn.onclick = async () => {
+      const p = savedSets?.[btn.dataset.set]?.polls?.[btn.dataset.poll];
+      if (p) await openPoll({question:p.question, choices:p.choices});
+    });
+    setList.querySelectorAll(".duplicate-saved").forEach(btn => btn.onclick = async () => {
+      const p = savedSets?.[btn.dataset.set]?.polls?.[btn.dataset.poll];
+      if (!p) return;
+      const copyRef = push(ref(db, `savedPollSets/${btn.dataset.set}/polls`));
+      await set(copyRef, {question:`${p.question} (copy)`, choices:p.choices || [], createdAt:serverTimestamp()});
+    });
+    setList.querySelectorAll(".delete-saved").forEach(btn => btn.onclick = async () => {
+      const p = savedSets?.[btn.dataset.set]?.polls?.[btn.dataset.poll];
+      if (!p || !confirm(`Delete this saved poll?\n\n${p.question}`)) return;
+      await remove(ref(db, `savedPollSets/${btn.dataset.set}/polls/${btn.dataset.poll}`));
+      if (editingSaved?.setId === btn.dataset.set && editingSaved?.pollId === btn.dataset.poll) clearEditor();
+    });
+    setList.querySelectorAll(".move-saved").forEach(btn => btn.onclick = async () => {
+      const fromSet = btn.dataset.set;
+      const p = savedSets?.[fromSet]?.polls?.[btn.dataset.poll];
+      const toSet = chooseSet(fromSet);
+      if (!p || !toSet) return;
+      const dest = push(ref(db, `savedPollSets/${toSet}/polls`));
+      await set(dest, {...p, movedAt:serverTimestamp()});
+      await remove(ref(db, `savedPollSets/${fromSet}/polls/${btn.dataset.poll}`));
+    });
+    setList.querySelectorAll(".rename-set").forEach(btn => btn.onclick = async () => {
+      const oldName = savedSets?.[btn.dataset.set]?.name || "";
+      const name = prompt("Rename poll set:", oldName);
+      if (!name || !name.trim() || name.trim() === oldName) return;
+      await update(ref(db, `savedPollSets/${btn.dataset.set}`), {name:name.trim(), updatedAt:serverTimestamp()});
+    });
+    setList.querySelectorAll(".delete-set").forEach(btn => btn.onclick = async () => {
+      const s = savedSets?.[btn.dataset.set];
+      const count = Object.keys(s?.polls || {}).length;
+      if (!confirm(`Delete “${s?.name || "this set"}” and its ${count} saved poll${count===1?"":"s"}?\n\nThis cannot be undone.`)) return;
+      await remove(ref(db, `savedPollSets/${btn.dataset.set}`));
+      if (editingSaved?.setId === btn.dataset.set) clearEditor();
+    });
+  }
 
   if (configured) {
     document.getElementById("connectionStatus").textContent = "Ready";
+    onValue(ref(db, "savedPollSets"), snap => {
+      savedSets = snap.val() || {};
+      renderLibrary();
+    });
   }
 
-  document.getElementById("createPoll").onclick = async () => {
-    const question = document.getElementById("question").value.trim();
-    const choices = [...answersEl.querySelectorAll("input")].map(i => i.value.trim()).filter(Boolean);
-    if (!question) return alert("Please enter a question.");
-    if (choices.length < 2) return alert("Please enter at least two response choices.");
+  async function openPoll(data) {
+    const question = data.question?.trim();
+    const choices = (data.choices || []).map(c=>String(c).trim()).filter(Boolean);
+    if (!question || choices.length < 2) return;
 
     let pollId = randomCode();
     while ((await get(ref(db, `polls/${pollId}`))).exists()) pollId = randomCode();
 
-    const poll = {
-      question,
-      choices,
-      open: true,
-      createdAt: serverTimestamp(),
-      shareResults: false
-    };
+    const poll = {question, choices, open:true, createdAt:serverTimestamp(), shareResults:false};
     await set(ref(db, `polls/${pollId}`), poll);
     activePollId = pollId;
     activePoll = poll;
@@ -153,6 +335,12 @@ function renderInstructor() {
     document.getElementById("toggleResults").disabled = false;
     document.getElementById("shareResults").disabled = true;
     document.getElementById("fullscreen").disabled = false;
+    document.getElementById("joinCard").scrollIntoView({behavior:"smooth", block:"start"});
+  }
+
+  document.getElementById("createPoll").onclick = async () => {
+    const data = validateEditor();
+    if (data) await openPoll(data);
   };
 
   function showJoinInfo() {
@@ -163,16 +351,17 @@ function renderInstructor() {
     document.getElementById("joinLink").textContent = joinUrl;
     const qr = document.getElementById("qrcode");
     qr.innerHTML = "";
-    if (window.QRCode) new QRCode(qr, { text: joinUrl, width: 180, height: 180 });
+    if (window.QRCode) new QRCode(qr, {text:joinUrl, width:180, height:180});
     document.getElementById("resultQuestion").textContent = activePoll.question;
     document.getElementById("togglePoll").textContent = activePoll.open ? "Close voting" : "Reopen voting";
     document.getElementById("togglePoll").className = activePoll.open ? "btn btn-danger" : "btn btn-success";
+    document.getElementById("shareResults").textContent = "Share results with students";
+    document.getElementById("shareResults").className = "btn";
     setResultsVisibility(false);
   }
 
   function listenResults() {
-    const voteRef = ref(db, `responses/${activePollId}`);
-    onValue(voteRef, snap => {
+    onValue(ref(db, `responses/${activePollId}`), snap => {
       const values = snap.val() || {};
       const counts = Array(activePoll.choices.length).fill(0);
       Object.values(values).forEach(v => {
@@ -197,8 +386,7 @@ function renderInstructor() {
     document.getElementById("barList").classList.toggle("hidden", !show);
     document.getElementById("resultsCovered").classList.toggle("hidden", show);
     document.getElementById("toggleResults").textContent = show ? "Hide results" : "Reveal results";
-    const share = document.getElementById("shareResults");
-    if (share && activePoll) share.disabled = !show;
+    if (activePoll) document.getElementById("shareResults").disabled = !show;
   }
 
   document.getElementById("toggleResults").onclick = () => setResultsVisibility(!resultsVisible);
@@ -207,7 +395,7 @@ function renderInstructor() {
     if (!activePollId || !resultsVisible) return;
     const next = !activePoll.shareResults;
     activePoll.shareResults = next;
-    await update(ref(db, `polls/${activePollId}`), {shareResults: next});
+    await update(ref(db, `polls/${activePollId}`), {shareResults:next});
     const btn = document.getElementById("shareResults");
     btn.textContent = next ? "Stop sharing with students" : "Share results with students";
     btn.className = next ? "btn btn-danger" : "btn";
@@ -216,37 +404,47 @@ function renderInstructor() {
   document.getElementById("togglePoll").onclick = async () => {
     if (!activePollId) return;
     activePoll.open = !activePoll.open;
-    await update(ref(db, `polls/${activePollId}`), {open: activePoll.open});
-    showJoinInfo();
+    await update(ref(db, `polls/${activePollId}`), {open:activePoll.open});
+    document.getElementById("togglePoll").textContent = activePoll.open ? "Close voting" : "Reopen voting";
+    document.getElementById("togglePoll").className = activePoll.open ? "btn btn-danger" : "btn btn-success";
   };
 
-  document.getElementById("newPoll").onclick = () => {
+  document.getElementById("newPoll").onclick = async () => {
+    if (!activePollId) return;
+    if (activePoll?.shareResults) await update(ref(db, `polls/${activePollId}`), {shareResults:false});
     activePollId = null;
     activePoll = null;
+    resultsVisible = false;
     document.getElementById("joinDetails").classList.add("hidden");
     document.getElementById("noPollMessage").classList.remove("hidden");
     document.getElementById("resultQuestion").textContent = "No active poll";
     document.getElementById("responseCount").textContent = "0 responses";
-    document.getElementById("barList").innerHTML = "";
-    setResultsVisibility(false);
     document.getElementById("toggleResults").disabled = true;
     document.getElementById("shareResults").disabled = true;
-    document.getElementById("shareResults").textContent = "Share results with students";
-    document.getElementById("shareResults").className = "btn";
     document.getElementById("fullscreen").disabled = true;
-    document.getElementById("question").focus();
+    document.getElementById("barList").innerHTML = "";
+    setResultsVisibility(false);
+    document.getElementById("libraryCard").scrollIntoView({behavior:"smooth", block:"start"});
   };
 
   document.getElementById("fullscreen").onclick = async () => {
-    document.body.classList.toggle("fullscreen-results");
-    if (document.body.classList.contains("fullscreen-results")) {
-      try { await document.documentElement.requestFullscreen?.(); } catch {}
+    const card = document.getElementById("resultsCard");
+    if (!document.fullscreenElement) {
+      document.body.classList.add("fullscreen-results");
+      try { await card.requestFullscreen?.(); } catch(e) { console.error(e); }
       document.getElementById("fullscreen").textContent = "Exit full screen";
     } else {
-      if (document.fullscreenElement) await document.exitFullscreen?.();
+      await document.exitFullscreen?.();
       document.getElementById("fullscreen").textContent = "Full-screen results";
     }
   };
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement) {
+      document.body.classList.remove("fullscreen-results");
+      const btn = document.getElementById("fullscreen");
+      if (btn) btn.textContent = "Full-screen results";
+    }
+  });
 }
 
 async function renderStudent(pollId) {
@@ -327,7 +525,7 @@ async function renderStudent(pollId) {
         alert("Voting has just closed.");
         return;
       }
-      await set(myVoteRef, { choice:selected, submittedAt:serverTimestamp() });
+      await set(myVoteRef, {choice:selected, submittedAt:serverTimestamp()});
       content.innerHTML = `<div class="thanks"><div class="check">✓</div><h2>Response recorded</h2><p class="helper">Results will appear here if your instructor shares them.</p></div>`;
     };
   });

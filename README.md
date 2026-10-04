@@ -1,34 +1,16 @@
-# ClassPoll Version 1.2
+# ClassPoll Version 1.3 Secure
 
-ClassPoll is a browser-based classroom polling app. Version 1.2 adds a saved poll library and poll sets while retaining quick/impromptu polling, QR-code student access, live results, result hiding/revealing, student result sharing, and full-screen projection.
+ClassPoll 1.3 adds Firebase Authentication and is designed to work with restricted Realtime Database security rules.
 
-## New in 1.2
+## Security model
+- Instructor signs in with Google.
+- Students are authenticated anonymously in the background; they do not see a login screen.
+- Realtime Database rules should restrict instructor operations to the instructor Firebase UID.
+- Students can read live poll information and submit only their own vote.
+- Students can read response totals only when the instructor enables result sharing.
 
-- Save poll questions in Firebase for reuse later.
-- Organize saved polls into named poll sets (for example, “Ethics – Class 3”).
-- Open a saved poll directly from the library.
-- Edit, duplicate, move, and delete saved polls.
-- Rename and delete poll sets.
-- Keep using the question editor for unsaved, impromptu polls.
+## Existing features retained
+Saved poll sets, QR-code student access, live response counts, close/reopen voting, reveal/hide results, share results with students, and full-screen projection.
 
-## Classroom workflow
-
-1. Prepare polls in advance and save them into one or more poll sets.
-2. In class, click **Open** beside the question you want.
-3. Students scan the QR code and vote.
-4. Close voting.
-5. Reveal results on the projector.
-6. Optionally share results with student phones.
-7. Choose **New poll**, then open the next saved question.
-
-## Files
-
-Upload these five files to the root of the existing GitHub repository:
-
-- `index.html`
-- `app.js`
-- `config.js`
-- `styles.css`
-- `README.md`
-
-Firebase configuration is already included for the existing ClassPoll project.
+## Deployment
+Upload app.js, config.js, index.html, README.md, and styles.css to the existing GitHub Pages repository. Then complete Firebase Authentication setup and publish the Version 1.3 Realtime Database rules.

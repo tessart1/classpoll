@@ -2,12 +2,16 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/fireba
 import {
   getDatabase, ref, set, get, update, onValue, remove, push, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously, onAuthStateChanged, signOut
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
 const root = document.getElementById("app");
 const params = new URLSearchParams(location.search);
 const pollFromUrl = (params.get("poll") || "").toUpperCase();
 const isStudent = !!pollFromUrl;
 let db = null;
+let auth = null;
 let configured = false;
 
 function configIsReady(cfg) {
@@ -19,6 +23,7 @@ try {
   if (configured) {
     const firebaseApp = initializeApp(window.CLASSPOLL_FIREBASE_CONFIG);
     db = getDatabase(firebaseApp);
+    auth = getAuth(firebaseApp);
   }
 } catch (e) {
   console.error(e);
@@ -45,14 +50,50 @@ function respondentId(pollId) {
   return id;
 }
 
-if (isStudent) renderStudent(pollFromUrl); else renderInstructor();
+bootstrap();
 
-function renderInstructor() {
+async function bootstrap() {
+  if (!configured) {
+    if (isStudent) renderStudent(pollFromUrl); else renderInstructor();
+    return;
+  }
+  if (isStudent) {
+    try {
+      if (!auth.currentUser) await signInAnonymously(auth);
+      renderStudent(pollFromUrl);
+    } catch (e) {
+      console.error(e);
+      root.innerHTML = `<main class="student-shell"><section class="student-card"><h2>Unable to connect</h2><p class="helper">Please ask your instructor to check the ClassPoll security setup.</p></section></main>`;
+    }
+  } else {
+    onAuthStateChanged(auth, user => {
+      if (user && !user.isAnonymous) renderInstructor(user);
+      else renderInstructorLogin();
+    });
+  }
+}
+
+function renderInstructorLogin() {
+  root.innerHTML = `<main class="student-shell"><div class="brand" style="margin-bottom:18px">ClassPoll <small>Instructor view · Version 1.3 Secure</small></div><section class="student-card"><h2>Instructor sign-in</h2><p class="helper">Sign in with the Google account authorized to manage this ClassPoll database. Students do not need to sign in.</p><button id="googleSignIn" class="btn btn-primary submit-btn">Sign in with Google</button><div id="loginError" class="helper" style="margin-top:14px"></div></section></main>`;
+  document.getElementById("googleSignIn").onclick = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({prompt:"select_account"});
+      await signInWithPopup(auth, provider);
+    } catch (e) {
+      console.error(e);
+      document.getElementById("loginError").textContent = e.code === "auth/unauthorized-domain" ? "This website must first be added to Firebase Authentication's authorized domains." : `Sign-in failed: ${e.message}`;
+    }
+  };
+}
+
+
+function renderInstructor(instructorUser=null) {
   root.innerHTML = `
     <main class="app-shell">
       <div class="topbar">
-        <div class="brand">ClassPoll <small>Instructor view · Version 1.2</small></div>
-        <div id="connectionStatus" class="status-pill">${configured ? "Connecting…" : "Firebase setup required"}</div>
+        <div class="brand">ClassPoll <small>Instructor view · Version 1.3 Secure</small></div>
+        <div style="display:flex;gap:8px;align-items:center"><div id="connectionStatus" class="status-pill">${configured ? "Connecting…" : "Firebase setup required"}</div>${instructorUser ? `<button id="signOutBtn" class="btn">Sign out</button>` : ""}</div>
       </div>
 
       ${configured ? "" : `<div class="notice error"><strong>One-time setup needed:</strong> this copy of ClassPoll needs its Firebase configuration before it can be used.</div>`}
@@ -125,6 +166,10 @@ function renderInstructor() {
         <div id="barList" class="bar-list hidden"></div>
       </section>
     </main>`;
+
+  if (instructorUser) {
+    document.getElementById("signOutBtn").onclick = () => signOut(auth);
+  }
 
   const answersEl = document.getElementById("answers");
   let editingSaved = null; // { setId, pollId }
@@ -493,7 +538,8 @@ async function renderStudent(pollId) {
       content.innerHTML = `<h2>Voting is closed</h2><p class="helper">Your instructor has closed this poll. Results will appear here if the instructor shares them.</p>`;
       return;
     }
-    const id = respondentId(pollId);
+    const id = auth.currentUser?.uid;
+    if (!id) { content.innerHTML = `<h2>Unable to vote</h2><p class="helper">Anonymous student authentication is not available.</p>`; return; }
     const myVoteRef = ref(db, `responses/${pollId}/${id}`);
     const existing = await get(myVoteRef);
     if (token !== renderToken) return;
